@@ -1,6 +1,8 @@
 #include <CodeCell.h>
+#include <math.h>
 
 CodeCell myCodeCell;
+
 
 /*
  * Overview:
@@ -72,43 +74,90 @@ CodeCell myCodeCell;
 
 void setup() {
   Serial.begin(115200); /* Set Serial baud rate to 115200. Ensure Tools/USB_CDC_On_Boot is enabled if using Serial. */
-  myCodeCell.Init(LIGHT + MOTION_ROTATION + MOTION_ACCELEROMETER);
+  //SerialBT.begin("ESP32_BT");      // Bluetooth Serial communication (ESP32_BT is the device name)
+  myCodeCell.Init(LIGHT + MOTION_ROTATION + MOTION_ACCELEROMETER + MOTION_GRAVITY + MOTION_GYRO);
+  myCodeCell.Run(); // idfk what this really does tbh
 }
-
-float x, y, z;
-int cycle = 0;
 
 unsigned long previousMillis = 0;
 unsigned long lastRunMillis = 0;
+unsigned long lastPrintMillis = 0;
 const long sensorInterval = 10; // 10ms interval for sensor reads
 const long runInterval = 100;   // 100ms for myCodeCell.Run()
+const long printInterval = 10; // Print sensor data every x ms interval
+
+int cycle = 0;
+float gx, gy, gz;
+float ax, ay, az;
+float vx = 0, vy = 0, vz = 0;
+float px = 0, py = 0, pz = 0;
+
+
+float dampeningFactor = 0.50; // attempts to account for velocity error by assuming it tends towards 0
+                              // 0.50 should halve every 100 ms
+// adjust for sensorInterval
+float dampeningFactorAdj = pow(dampeningFactor, float(sensorInterval) / 1000);
+
+                            
+
+char buffer[50];  // Buffer for formatted string
 
 void loop() {
   unsigned long currentMillis = millis();
 
-  // Call myCodeCell.Run() every 100ms for power and battery management
+  // Call myCodeCell.Run() every 100ms for power and battery management probably
   if (currentMillis - lastRunMillis >= runInterval) {
     lastRunMillis = currentMillis;
-    myCodeCell.Run(); // Power management happens here
+    //myCodeCell.Run(); // idfk what this really does tbh
   }
 
-  // Read sensors and handle data every 10ms
+  // Read sensors every 10ms
   if (currentMillis - previousMillis >= sensorInterval) {
     previousMillis = currentMillis;
     
+    // Read accelerometer data
+    myCodeCell.Motion_AccelerometerRead(ax, ay, az); // Works, outputs linear acceleration in m/s/s
+    myCodeCell.Motion_GravityRead(gx, gy, gz); // Always outputs gravity vector of magnitude 9.8 m/s/s
+    //myCodeCell.Motion_GyroRead(gx, gy, gz);
+
+    ax = -(ax - gx);
+    ay = -(ay - gy);
+    az = -(az - gz);
+
+    vx = vx * dampeningFactorAdj;
+    vy = vy * dampeningFactorAdj;
+    vz = vz * dampeningFactorAdj;
+
+    vx = vx + ax * sensorInterval / 1000;
+    vy = vy + ay * sensorInterval / 1000;
+    vz = vz + az * sensorInterval / 1000;
+
+    px = px + vx * sensorInterval / 1000;
+    py = py + vy * sensorInterval / 1000;
+    pz = pz + vz * sensorInterval / 1000;
+  }
+
+  // Print data every second (or adjust to your preferred interval)
+  if (currentMillis - lastPrintMillis >= printInterval) {
+    lastPrintMillis = currentMillis;
+
+    // Count cycles
     cycle++;
+
+    // Print cycle count and accelerometer data
     Serial.print("Cycle: ");
     Serial.println(cycle);
 
-    // Read accelerometer data
-    myCodeCell.Motion_AccelerometerRead(x, y, z);
-    
-    // Print accelerometer data with formatting
-    Serial.print("X: ");
-    Serial.print(x, 2); // 2 decimal places
-    Serial.print(", Y: ");
-    Serial.print(y, 2);
-    Serial.print(", Z: ");
-    Serial.println(z, 2); // Newline after Z value
+    sprintf(buffer, "Gx: %6.2f, Gy: %6.2f, Gz: %6.2f", gx, gy, gz);
+    Serial.println(buffer);
+
+    sprintf(buffer, "Ax: %6.2f, Ay: %6.2f, Az: %6.2f", ax, ay, az);
+    Serial.println(buffer);
+
+    sprintf(buffer, "Vx: %6.2f, Vy: %6.2f, Vz: %6.2f", vx, vy, vz);
+    Serial.println(buffer);
+
+    sprintf(buffer, "Px: %6.2f, Py: %6.2f, Pz: %6.2f", px, py, pz);
+    Serial.println(buffer);
   }
 }
