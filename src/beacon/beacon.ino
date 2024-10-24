@@ -5,6 +5,8 @@ const char* ssid = "GORDAN FREEMAN";
 const char* password = "crowbars";
 
 WiFiServer server(12345);
+float beaconPositionX = 0.0;  // Replace with actual coordinates of the beacon
+float beaconPositionY = 0.0;
 
 void setup() {
   Serial.begin(115200);
@@ -34,9 +36,15 @@ void loop() {
       Serial.printf("Parsed data - ax: %.2f, ay: %.2f, az: %.2f, gx: %.2f, gy: %.2f, gz: %.2f, mx: %.2f, my: %.2f, mz: %.2f\n",
                     ax, ay, az, gx, gy, gz, mx, my, mz);
 
-      // Apply filtering or further processing to correct position estimation
-      // TODO: Use the received data to calculate the distance and further refine robot's position
+      // RSSI Measurement for Distance Estimation
+      int32_t rssi = WiFi.RSSI();
+      float estimatedDistance = pow(10, ((-69 - rssi) / (10 * 2)));  // Simple RSSI to distance estimation
+      Serial.printf("Estimated Distance based on RSSI: %.2f meters\n", estimatedDistance);
 
+      // TODO: Implement AoA measurement for further distance refinement
+      // For now, we will just send the estimated distance back to the robot for triangulation
+
+      client.print(estimatedDistance);
     } else {
       // Data parsing failed
       Serial.println("Error: Failed to parse incoming data correctly.");

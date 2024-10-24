@@ -67,10 +67,7 @@
  */
 
 // ESP32 Positioning System V4
-// This version uses two ESP32s - one as a mobile robot and one as a stationary beacon to refine position estimation.
-
-// ESP32 Positioning System V4
-// This version uses two ESP32s - one as a mobile robot and one as a stationary beacon to refine position estimation.
+// This version uses three ESP32s as stationary beacons and one ESP32 as a mobile robot to refine position estimation using RSSI and AoA.
 
 /* === Mobile ESP32 Code === */
 #include <CodeCell.h>
@@ -81,7 +78,8 @@
 const char* ssid = "GORDAN FREEMAN";
 const char* password = "crowbars";
 
-const char* beaconIP = "192.168.4.3";  // Replace with actual IP of the beacon
+const char* beaconIPs[] = {"192.168.4.20", "192.168.4.21", "192.168.4.4"};  // Replace with actual IPs of the beacons
+
 const int beaconPort = 12345;
 
 WiFiClient client;
@@ -124,16 +122,18 @@ void loop() {
     float theta = atan2(my, mx) * 180 / M_PI;
 
     // Debugging output for data being sent
-    Serial.printf("Sending data to beacon: ax=%.2f, ay=%.2f, az=%.2f, gx=%.2f, gy=%.2f, gz=%.2f, mx=%.2f, my=%.2f, mz=%.2f\n", ax, ay, az, gx, gy, gz, mx, my, mz);
+    Serial.printf("Sending data to beacons: ax=%.2f, ay=%.2f, az=%.2f, gx=%.2f, gy=%.2f, gz=%.2f, mx=%.2f, my=%.2f, mz=%.2f, pitch=%.2f, roll=%.2f, theta=%.2f\n", ax, ay, az, gx, gy, gz, mx, my, mz, pitch_angle * 180 / M_PI, roll_angle * 180 / M_PI, theta);
 
-    // Send data to beacon with error detection
-    if (client.connect(beaconIP, beaconPort)) {
-      char buffer[150];
-      snprintf(buffer, sizeof(buffer), "%f,%f,%f,%f,%f,%f,%f,%f,%f\n", ax, ay, az, gx, gy, gz, mx, my, mz);
-      client.print(buffer);
-      client.stop();
-    } else {
-      Serial.println("Failed to connect to beacon");
+    // Send data to each beacon
+    for (int i = 0; i < 3; i++) {
+      if (client.connect(beaconIPs[i], beaconPort)) {
+        char buffer[200];
+        snprintf(buffer, sizeof(buffer), "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f\n", ax, ay, az, gx, gy, gz, mx, my, mz, pitch_angle, roll_angle, theta);
+        client.print(buffer);
+        client.stop();
+      } else {
+        Serial.printf("Failed to connect to beacon %d\n", i + 1);
+      }
     }
   }
 }
