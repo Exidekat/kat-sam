@@ -71,6 +71,14 @@
 
 CodeCell myCodeCell;
 
+/*
+ * V3 Roadmap Overview:
+ * 1. **Global Reference Frame Conversion**: Use gravity vector to convert accelerometer data to a global reference frame.
+ * 2. **Orientation Calculation**: Estimate the device's orientation angle 'theta' with respect to the global north using the magnetometer.
+ * 3. **Fusion with Position Systems**: Integrate future triangulation data from GPS or beacons for improved accuracy and verification.
+ * 4. **Data Filtering**: Implement filtering techniques (e.g., Kalman filter) to improve accuracy and reduce noise in position estimates.
+ */
+
 void setup() {
   Serial.begin(115200); /* Set Serial baud rate to 115200. Ensure Tools/USB_CDC_On_Boot is enabled if using Serial. */
   //SerialBT.begin("ESP32_BT");      // Bluetooth Serial communication (ESP32_BT is the device name)
@@ -93,12 +101,17 @@ float mx, my, mz;
 float roll, pitch, yaw;
 float vx = 0, vy = 0, vz = 0;
 float px = 0, py = 0, pz = 0;
+float theta = 0; // Angle with respect to global north
 
-float dampeningFactor = 0.50; // attempts to account for velocity error by assuming it tends towards 0
-                              // 0.50 should halve every 100 ms
-// adjust for sensorInterval
-float dampeningFactorAdj = pow(dampeningFactor, float(sensorInterval) / 1000);
-                             
+// Kalman Filter Variables
+float kalman_px = 0, kalman_py = 0, kalman_pz = 0;
+float kalman_vx = 0, kalman_vy = 0, kalman_vz = 0;
+float kalman_ax = 0, kalman_ay = 0, kalman_az = 0;
+float p_estimate = 1.0;
+float process_noise = 0.01;
+float measurement_noise = 0.1;
+float kalman_gain;
+
 char buffer[50];  // Buffer for formatted string
 
 void loop() {
@@ -107,7 +120,7 @@ void loop() {
   // Call myCodeCell.Run() every 100ms for power and battery management
   if (currentMillis - lastRunMillis >= runInterval) {
     lastRunMillis = currentMillis;
-    //myCodeCell.Run();
+    myCodeCell.Run();
   }
 
   // Read sensors every 10ms
@@ -118,42 +131,31 @@ void loop() {
     myCodeCell.Motion_AccelerometerRead(raw_ax, raw_ay, raw_az); // Outputs linear acceleration in m/s/s
     myCodeCell.Motion_GravityRead(gx, gy, gz); // Outputs gravity vector of magnitude 9.8 m/s/s
 
-    // Correct accelerometer data by removing the effect of gravity
-    ax = -(raw_ax - gx);
-    ay = -(raw_ay - gy);
-    az = -(raw_az - gz);
+    // Convert accelerometer data to the global reference frame using gravity vector
+    float acc_global_x = raw_ax - gx;
+    float acc_global_y = raw_ay - gy;
+    float acc_global_z = raw_az - gz;
 
-    // Apply magnetometer data for correction and orientation adjustments
+    // Apply Kalman filter for acceleration
+    kalman_gain = p_estimate / (p_estimate + measurement_noise);
+    kalman_ax = kalman_ax + kalman_gain * (acc_global_x - kalman_ax);
+    kalman_ay = kalman_ay + kalman_gain * (acc_global_y - kalman_ay);
+    kalman_az = kalman_az + kalman_gain * (acc_global_z - kalman_az);
+    p_estimate = (1 - kalman_gain) * p_estimate + process_noise;
+
+    // Read magnetometer data for orientation
     myCodeCell.Motion_MagnetometerRead(mx, my, mz);
-    myCodeCell.Motion_RotationRead(roll, pitch, yaw);
+    theta = atan2(my, mx) * 180 / M_PI; // Calculate angle with respect to global north
 
-    // Apply a complementary filter to fuse accelerometer and magnetometer data for better orientation estimation
-    float alpha = 0.98;
-    float acc_roll = atan2(ay, az) * 180 / M_PI;
-    float acc_pitch = atan2(-ax, sqrt(ay * ay + az * az)) * 180 / M_PI;
-    roll = alpha * (roll + gx * sensorInterval / 1000) + (1 - alpha) * acc_roll;
-    pitch = alpha * (pitch + gy * sensorInterval / 1000) + (1 - alpha) * acc_pitch;
-
-    // Improve dampening with adaptive dampening based on acceleration magnitude
-    float accelerationMagnitude = sqrt(ax * ax + ay * ay + az * az);
-    float adaptiveDampeningFactor = dampeningFactor / (1 + accelerationMagnitude);
-    float adaptiveDampeningFactorAdj = pow(adaptiveDampeningFactor, float(sensorInterval) / 1000);
-
-    // Adjust velocity based on corrected acceleration
-    vx = vx * adaptiveDampeningFactorAdj + ax * sensorInterval / 1000;
-    vy = vy * adaptiveDampeningFactorAdj + ay * sensorInterval / 1000;
-    vz = vz * adaptiveDampeningFactorAdj + az * sensorInterval / 1000;
-
-    // Apply a threshold to velocity to prevent drift when stationary
-    float velocityThreshold = 0.05;
-    if (fabs(vx) < velocityThreshold) vx = 0;
-    if (fabs(vy) < velocityThreshold) vy = 0;
-    if (fabs(vz) < velocityThreshold) vz = 0;
+    // Adjust velocity based on corrected acceleration in the global frame
+    kalman_vx = kalman_vx * 0.9 + kalman_ax * sensorInterval / 1000;
+    kalman_vy = kalman_vy * 0.9 + kalman_ay * sensorInterval / 1000;
+    kalman_vz = kalman_vz * 0.9 + kalman_az * sensorInterval / 1000;
 
     // Update position based on velocity
-    px = px + vx * sensorInterval / 1000;
-    py = py + vy * sensorInterval / 1000;
-    pz = pz + vz * sensorInterval / 1000;
+    kalman_px += kalman_vx * sensorInterval / 1000;
+    kalman_py += kalman_vy * sensorInterval / 1000;
+    kalman_pz += kalman_vz * sensorInterval / 1000;
   }
 
   // Print data every second (or adjust to your preferred interval)
@@ -173,18 +175,16 @@ void loop() {
     sprintf(buffer, "Raw_Ax: %6.2f, Raw_Ay: %6.2f, Raw_Az: %6.2f", raw_ax, raw_ay, raw_az);
     Serial.println(buffer);
 
-    sprintf(buffer, "Ax: %6.2f, Ay: %6.2f, Az: %6.2f", ax, ay, az);
+    sprintf(buffer, "Acc_Global_X: %6.2f, Acc_Global_Y: %6.2f, Acc_Global_Z: %6.2f", kalman_ax, kalman_ay, kalman_az);
     Serial.println(buffer);
 
-    sprintf(buffer, "Vx: %6.2f, Vy: %6.2f, Vz: %6.2f", vx, vy, vz);
+    sprintf(buffer, "Vx: %6.2f, Vy: %6.2f, Vz: %6.2f", kalman_vx, kalman_vy, kalman_vz);
     Serial.println(buffer);
 
-    sprintf(buffer, "Px: %6.2f, Py: %6.2f, Pz: %6.2f", px, py, pz);
+    sprintf(buffer, "Px: %6.2f, Py: %6.2f, Pz: %6.2f", kalman_px, kalman_py, kalman_pz);
     Serial.println(buffer);
 
-    sprintf(buffer, "Roll: %6.2f, Pitch: %6.2f, Yaw: %6.2f", roll, pitch, yaw);
+    sprintf(buffer, "Theta: %6.2f", theta);
     Serial.println(buffer);
   }
 }
-
-
