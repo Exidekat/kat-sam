@@ -1,9 +1,3 @@
-#include <CodeCell.h>
-#include <math.h>
-
-CodeCell myCodeCell;
-
-
 /*
  * Overview:
  * This code shows you how easy it is to set up and run the CodeCell. You just needs to specify which sensors to enable by 
@@ -72,11 +66,16 @@ CodeCell myCodeCell;
  * 
  */
 
+#include <CodeCell.h>
+#include <math.h>
+
+CodeCell myCodeCell;
+
 void setup() {
   Serial.begin(115200); /* Set Serial baud rate to 115200. Ensure Tools/USB_CDC_On_Boot is enabled if using Serial. */
   //SerialBT.begin("ESP32_BT");      // Bluetooth Serial communication (ESP32_BT is the device name)
-  myCodeCell.Init(LIGHT + MOTION_ROTATION + MOTION_ACCELEROMETER + MOTION_GRAVITY + MOTION_GYRO);
-  myCodeCell.Run(); // idfk what this really does tbh
+  myCodeCell.Init(LIGHT + MOTION_ROTATION + MOTION_ACCELEROMETER + MOTION_GRAVITY + MOTION_GYRO + MOTION_MAGNETOMETER);
+  myCodeCell.Run();
 }
 
 unsigned long previousMillis = 0;
@@ -84,54 +83,74 @@ unsigned long lastRunMillis = 0;
 unsigned long lastPrintMillis = 0;
 const long sensorInterval = 10; // 10ms interval for sensor reads
 const long runInterval = 100;   // 100ms for myCodeCell.Run()
-const long printInterval = 10; // Print sensor data every x ms interval
+const long printInterval = 1000; // Print sensor data every 1000ms interval
 
 int cycle = 0;
 float gx, gy, gz;
 float ax, ay, az;
+float raw_ax, raw_ay, raw_az;
+float mx, my, mz;
+float roll, pitch, yaw;
 float vx = 0, vy = 0, vz = 0;
 float px = 0, py = 0, pz = 0;
-
 
 float dampeningFactor = 0.50; // attempts to account for velocity error by assuming it tends towards 0
                               // 0.50 should halve every 100 ms
 // adjust for sensorInterval
 float dampeningFactorAdj = pow(dampeningFactor, float(sensorInterval) / 1000);
-
-                            
-
+                             
 char buffer[50];  // Buffer for formatted string
 
 void loop() {
   unsigned long currentMillis = millis();
 
-  // Call myCodeCell.Run() every 100ms for power and battery management probably
+  // Call myCodeCell.Run() every 100ms for power and battery management
   if (currentMillis - lastRunMillis >= runInterval) {
     lastRunMillis = currentMillis;
-    //myCodeCell.Run(); // idfk what this really does tbh
+    //myCodeCell.Run();
   }
 
   // Read sensors every 10ms
   if (currentMillis - previousMillis >= sensorInterval) {
     previousMillis = currentMillis;
     
-    // Read accelerometer data
-    myCodeCell.Motion_AccelerometerRead(ax, ay, az); // Works, outputs linear acceleration in m/s/s
-    myCodeCell.Motion_GravityRead(gx, gy, gz); // Always outputs gravity vector of magnitude 9.8 m/s/s
-    //myCodeCell.Motion_GyroRead(gx, gy, gz);
+    // Read accelerometer and gravity data
+    myCodeCell.Motion_AccelerometerRead(raw_ax, raw_ay, raw_az); // Outputs linear acceleration in m/s/s
+    myCodeCell.Motion_GravityRead(gx, gy, gz); // Outputs gravity vector of magnitude 9.8 m/s/s
 
-    ax = -(ax - gx);
-    ay = -(ay - gy);
-    az = -(az - gz);
+    // Correct accelerometer data by removing the effect of gravity
+    ax = -(raw_ax - gx);
+    ay = -(raw_ay - gy);
+    az = -(raw_az - gz);
 
-    vx = vx * dampeningFactorAdj;
-    vy = vy * dampeningFactorAdj;
-    vz = vz * dampeningFactorAdj;
+    // Apply magnetometer data for correction and orientation adjustments
+    myCodeCell.Motion_MagnetometerRead(mx, my, mz);
+    myCodeCell.Motion_RotationRead(roll, pitch, yaw);
 
-    vx = vx + ax * sensorInterval / 1000;
-    vy = vy + ay * sensorInterval / 1000;
-    vz = vz + az * sensorInterval / 1000;
+    // Apply a complementary filter to fuse accelerometer and magnetometer data for better orientation estimation
+    float alpha = 0.98;
+    float acc_roll = atan2(ay, az) * 180 / M_PI;
+    float acc_pitch = atan2(-ax, sqrt(ay * ay + az * az)) * 180 / M_PI;
+    roll = alpha * (roll + gx * sensorInterval / 1000) + (1 - alpha) * acc_roll;
+    pitch = alpha * (pitch + gy * sensorInterval / 1000) + (1 - alpha) * acc_pitch;
 
+    // Improve dampening with adaptive dampening based on acceleration magnitude
+    float accelerationMagnitude = sqrt(ax * ax + ay * ay + az * az);
+    float adaptiveDampeningFactor = dampeningFactor / (1 + accelerationMagnitude);
+    float adaptiveDampeningFactorAdj = pow(adaptiveDampeningFactor, float(sensorInterval) / 1000);
+
+    // Adjust velocity based on corrected acceleration
+    vx = vx * adaptiveDampeningFactorAdj + ax * sensorInterval / 1000;
+    vy = vy * adaptiveDampeningFactorAdj + ay * sensorInterval / 1000;
+    vz = vz * adaptiveDampeningFactorAdj + az * sensorInterval / 1000;
+
+    // Apply a threshold to velocity to prevent drift when stationary
+    float velocityThreshold = 0.05;
+    if (fabs(vx) < velocityThreshold) vx = 0;
+    if (fabs(vy) < velocityThreshold) vy = 0;
+    if (fabs(vz) < velocityThreshold) vz = 0;
+
+    // Update position based on velocity
     px = px + vx * sensorInterval / 1000;
     py = py + vy * sensorInterval / 1000;
     pz = pz + vz * sensorInterval / 1000;
@@ -144,11 +163,14 @@ void loop() {
     // Count cycles
     cycle++;
 
-    // Print cycle count and accelerometer data
+    // Print cycle count and sensor data
     Serial.print("Cycle: ");
     Serial.println(cycle);
 
     sprintf(buffer, "Gx: %6.2f, Gy: %6.2f, Gz: %6.2f", gx, gy, gz);
+    Serial.println(buffer);
+
+    sprintf(buffer, "Raw_Ax: %6.2f, Raw_Ay: %6.2f, Raw_Az: %6.2f", raw_ax, raw_ay, raw_az);
     Serial.println(buffer);
 
     sprintf(buffer, "Ax: %6.2f, Ay: %6.2f, Az: %6.2f", ax, ay, az);
@@ -159,5 +181,10 @@ void loop() {
 
     sprintf(buffer, "Px: %6.2f, Py: %6.2f, Pz: %6.2f", px, py, pz);
     Serial.println(buffer);
+
+    sprintf(buffer, "Roll: %6.2f, Pitch: %6.2f, Yaw: %6.2f", roll, pitch, yaw);
+    Serial.println(buffer);
   }
 }
+
+
