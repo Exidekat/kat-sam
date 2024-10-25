@@ -71,17 +71,8 @@
 
 CodeCell myCodeCell;
 
-/*
- * V3 Roadmap Overview:
- * 1. **Global Reference Frame Conversion**: Use gravity vector to convert accelerometer data to a global reference frame.
- * 2. **Orientation Calculation**: Estimate the device's orientation angle 'theta' with respect to the global north using the magnetometer.
- * 3. **Fusion with Position Systems**: Integrate future triangulation data from GPS or beacons for improved accuracy and verification.
- * 4. **Data Filtering**: Implement filtering techniques (e.g., Kalman filter) to improve accuracy and reduce noise in position estimates.
- */
-
 void setup() {
-  Serial.begin(115200); /* Set Serial baud rate to 115200. Ensure Tools/USB_CDC_On_Boot is enabled if using Serial. */
-  //SerialBT.begin("ESP32_BT");      // Bluetooth Serial communication (ESP32_BT is the device name)
+  Serial.begin(115200); // Set Serial baud rate to 115200
   myCodeCell.Init(LIGHT + MOTION_ROTATION + MOTION_ACCELEROMETER + MOTION_GRAVITY + MOTION_GYRO + MOTION_MAGNETOMETER);
   myCodeCell.Run();
 }
@@ -91,7 +82,7 @@ unsigned long lastRunMillis = 0;
 unsigned long lastPrintMillis = 0;
 const long sensorInterval = 10; // 10ms interval for sensor reads
 const long runInterval = 100;   // 100ms for myCodeCell.Run()
-const long printInterval = 1000; // Print sensor data every 1000ms interval
+const long printInterval = 10; // Print sensor data every 1000ms interval
 
 int cycle = 0;
 float gx, gy, gz;
@@ -122,15 +113,13 @@ const int smoothingWindow = 5;
 float ax_history[smoothingWindow] = {0}, ay_history[smoothingWindow] = {0}, az_history[smoothingWindow] = {0};
 int smoothingIndex = 0;
 
-char buffer[100];  // Buffer for formatted string
-
 void loop() {
   unsigned long currentMillis = millis();
 
   // Call myCodeCell.Run() every 100ms for power and battery management
   if (currentMillis - lastRunMillis >= runInterval) {
     lastRunMillis = currentMillis;
-    myCodeCell.Run();
+    //myCodeCell.Run();
   }
 
   // Read sensors every 10ms
@@ -184,11 +173,7 @@ void loop() {
 
     // Check for stationary condition using Zero-Velocity Update (ZUPT)
     float accelerationMagnitude = sqrt(kalman_ax * kalman_ax + kalman_ay * kalman_ay + kalman_az * kalman_az);
-    if (fabs(accelerationMagnitude - gravityMagnitude) < stationaryThreshold) {
-      isStationary = true;
-    } else {
-      isStationary = false;
-    }
+    isStationary = fabs(accelerationMagnitude - gravityMagnitude) < stationaryThreshold;
 
     // If stationary, set velocities to zero
     if (isStationary) {
@@ -212,7 +197,7 @@ void loop() {
     theta = atan2(my, mx) * 180 / M_PI; // Calculate angle with respect to global north
   }
 
-  // Print data every second (or adjust to your preferred interval)
+  // Print data every second
   if (currentMillis - lastPrintMillis >= printInterval) {
     lastPrintMillis = currentMillis;
 
@@ -233,4 +218,3 @@ void loop() {
     Serial.println("====================================================\n");
   }
 }
-
